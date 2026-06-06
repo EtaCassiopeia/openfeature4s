@@ -114,6 +114,7 @@ lazy val javaBridge = (project in file("java-bridge"))
   .settings(
     name := "openfeature4s-java-bridge",
     commonSettings,
+    zioTestSettings,
     crossVersionSourceDirs,
     libraryDependencies += "dev.openfeature" % "sdk" % openFeatureSdkVersion
   )

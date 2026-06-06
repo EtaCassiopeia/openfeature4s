@@ -1,0 +1,53 @@
+package openfeature.zio
+
+import openfeature.model.ProviderStatus
+import zio._
+import zio.test._
+import zio.test.Assertion._
+
+object ProviderStatusSpec extends ZIOSpecDefault {
+
+  def spec = suite("ProviderStatusSpec")(
+    suite("ProviderStatus enum")(
+      test("all statuses exist") {
+        assertTrue(ProviderStatus.NotReady != null) &&
+        assertTrue(ProviderStatus.Ready != null) &&
+        assertTrue(ProviderStatus.Error != null) &&
+        assertTrue(ProviderStatus.Stale != null) &&
+        assertTrue(ProviderStatus.Fatal != null) &&
+        assertTrue(ProviderStatus.ShuttingDown != null)
+      }
+    ),
+    suite("canEvaluate")(
+      test("Ready can evaluate") {
+        assertTrue(ProviderStatus.Ready.canEvaluate)
+      },
+      test("Stale can evaluate") {
+        assertTrue(ProviderStatus.Stale.canEvaluate)
+      },
+      test("NotReady cannot evaluate") {
+        assertTrue(!ProviderStatus.NotReady.canEvaluate)
+      },
+      test("Error cannot evaluate") {
+        assertTrue(!ProviderStatus.Error.canEvaluate)
+      },
+      test("Fatal cannot evaluate") {
+        assertTrue(!ProviderStatus.Fatal.canEvaluate)
+      },
+      test("ShuttingDown cannot evaluate") {
+        assertTrue(!ProviderStatus.ShuttingDown.canEvaluate)
+      }
+    ),
+    suite("isRecoverable")(
+      test("Ready is recoverable") {
+        assertTrue(ProviderStatus.Ready.isRecoverable)
+      },
+      test("Error is recoverable") {
+        assertTrue(ProviderStatus.Error.isRecoverable)
+      },
+      test("Fatal is not recoverable") {
+        assertTrue(!ProviderStatus.Fatal.isRecoverable)
+      }
+    )
+  )
+}

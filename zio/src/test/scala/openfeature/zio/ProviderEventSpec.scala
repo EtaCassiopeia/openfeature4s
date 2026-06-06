@@ -1,0 +1,144 @@
+package openfeature.zio
+
+import openfeature.model.{ErrorCode, FlagMetadata, ProviderEvent, ProviderMetadata, ProviderStatus}
+import zio._
+import zio.test._
+import zio.test.Assertion._
+
+object ProviderEventSpec extends ZIOSpecDefault {
+
+  val testMetadata = ProviderMetadata("TestProvider", "1.0")
+
+  def spec = suite("ProviderEventSpec")(
+    suite("ProviderMetadata")(
+      test("toString without version") {
+        val meta = ProviderMetadata("MyProvider", None)
+        assertTrue(meta.toString == "MyProvider")
+      },
+      test("toString with version") {
+        val meta = ProviderMetadata("MyProvider", Some("2.0"))
+        assertTrue(meta.toString == "MyProvider v2.0")
+      },
+      test("apply with version string") {
+        val meta = ProviderMetadata("MyProvider", "1.5")
+        assertTrue(meta.version == Some("1.5"))
+      }
+    ),
+    suite("ProviderEvent metadata extension")(
+      test("Ready event has metadata") {
+        val event = ProviderEvent.Ready(testMetadata)
+        assertTrue(event.metadata == testMetadata)
+      },
+      test("Error event has metadata") {
+        val event = ProviderEvent.Error(new RuntimeException("test"), testMetadata)
+        assertTrue(event.metadata == testMetadata)
+      },
+      test("Stale event has metadata") {
+        val event = ProviderEvent.Stale("cache expired", testMetadata)
+        assertTrue(event.metadata == testMetadata)
+      },
+      test("ConfigurationChanged event has metadata") {
+        val event = ProviderEvent.ConfigurationChanged(Set("flag1", "flag2"), testMetadata)
+        assertTrue(event.metadata == testMetadata)
+      },
+      test("Reconnecting event has metadata") {
+        val event = ProviderEvent.Reconnecting(testMetadata)
+        assertTrue(event.metadata == testMetadata)
+      }
+    ),
+    suite("ProviderEvent isError extension")(
+      test("Error event is error") {
+        val event = ProviderEvent.Error(new RuntimeException("test"), testMetadata)
+        assertTrue(event.isError)
+      },
+      test("Ready event is not error") {
+        val event = ProviderEvent.Ready(testMetadata)
+        assertTrue(!event.isError)
+      },
+      test("Stale event is not error") {
+        val event = ProviderEvent.Stale("reason", testMetadata)
+        assertTrue(!event.isError)
+      },
+      test("ConfigurationChanged event is not error") {
+        val event = ProviderEvent.ConfigurationChanged(Set.empty, testMetadata)
+        assertTrue(!event.isError)
+      },
+      test("Reconnecting event is not error") {
+        val event = ProviderEvent.Reconnecting(testMetadata)
+        assertTrue(!event.isError)
+      }
+    ),
+    suite("ProviderEvent.Error with error details (spec 5.1.4, 5.1.5)")(
+      test("Error event with error code and message") {
+        val event = ProviderEvent.Error(
+          new RuntimeException("test"),
+          testMetadata,
+          errorCode = Some(ErrorCode.General),
+          errorMessage = Some("Something went wrong")
+        )
+        event match {
+          case ProviderEvent.Error(_, _, code, msg, _) =>
+            assertTrue(code == Some(ErrorCode.General)) &&
+            assertTrue(msg == Some("Something went wrong"))
+          case _ => assertTrue(false)
+        }
+      },
+      test("Error event defaults to no error code/message") {
+        val event = ProviderEvent.Error(new RuntimeException("test"), testMetadata)
+        event match {
+          case ProviderEvent.Error(_, _, code, msg, _) =>
+            assertTrue(code == None) &&
+            assertTrue(msg == None)
+          case _ => assertTrue(false)
+        }
+      }
+    ),
+    suite("ProviderEvent isHealthy extension")(
+      test("Ready event is healthy") {
+        val event = ProviderEvent.Ready(testMetadata)
+        assertTrue(event.isHealthy)
+      },
+      test("ConfigurationChanged event is healthy") {
+        val event = ProviderEvent.ConfigurationChanged(Set.empty, testMetadata)
+        assertTrue(event.isHealthy)
+      },
+      test("Error event is not healthy") {
+        val event = ProviderEvent.Error(new RuntimeException("test"), testMetadata)
+        assertTrue(!event.isHealthy)
+      },
+      test("Stale event is not healthy") {
+        val event = ProviderEvent.Stale("reason", testMetadata)
+        assertTrue(!event.isHealthy)
+      },
+      test("Reconnecting event is not healthy") {
+        val event = ProviderEvent.Reconnecting(testMetadata)
+        assertTrue(!event.isHealthy)
+      }
+    ),
+    suite("ProviderEvent eventMeta extension")(
+      test("eventMeta returns empty by default") {
+        val event = ProviderEvent.Ready(testMetadata)
+        assertTrue(event.eventMeta.isEmpty)
+      },
+      test("eventMeta returns attached metadata") {
+        val meta  = FlagMetadata.fromStrings("source" -> "webhook", "region" -> "us-east")
+        val event = ProviderEvent.ConfigurationChanged(Set("flag-1"), testMetadata, meta)
+        assertTrue(event.eventMeta.getString("source").contains("webhook")) &&
+        assertTrue(event.eventMeta.getString("region").contains("us-east"))
+      },
+      test("all event types carry eventMetadata") {
+        val meta    = FlagMetadata.fromStrings("key" -> "value")
+        val ready   = ProviderEvent.Ready(testMetadata, meta)
+        val error   = ProviderEvent.Error(new RuntimeException("x"), testMetadata, eventMetadata = meta)
+        val stale   = ProviderEvent.Stale("stale", testMetadata, meta)
+        val changed = ProviderEvent.ConfigurationChanged(Set.empty, testMetadata, meta)
+        val recon   = ProviderEvent.Reconnecting(testMetadata, meta)
+        assertTrue(ready.eventMeta == meta) &&
+        assertTrue(error.eventMeta == meta) &&
+        assertTrue(stale.eventMeta == meta) &&
+        assertTrue(changed.eventMeta == meta) &&
+        assertTrue(recon.eventMeta == meta)
+      }
+    )
+  )
+}

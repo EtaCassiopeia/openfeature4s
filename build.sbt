@@ -40,7 +40,8 @@ ThisBuild / scalacOptions ++= Seq(
   "-feature",
   "-unchecked",
   "-language:implicitConversions",
-  "-language:higherKinds"
+  "-language:higherKinds",
+  "-language:existentials"
 )
 
 ThisBuild / scalacOptions ++= {

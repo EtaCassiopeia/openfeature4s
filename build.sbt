@@ -60,6 +60,8 @@ ThisBuild / coverageFailOnMinimum    := true
 ThisBuild / mimaFailOnNoPrevious := false
 
 // Version-specific source directories for cross-compiled modules.
+// scala-3/ contains Scala 3-specific syntax (enums, opaque types, given/using).
+// scala-2/ contains equivalent Scala 2.13 implementations (sealed traits, implicit, AnyVal).
 // Scala 3-only modules (cats, kyo, pure) do NOT use this — all their source lives in src/main/scala/.
 lazy val crossVersionSourceDirs = Seq(
   Compile / unmanagedSourceDirectories ++= {

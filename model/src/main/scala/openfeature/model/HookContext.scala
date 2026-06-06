@@ -8,8 +8,8 @@ final case class TypedKey[A](name: String)
 
 /** Per-hook mutable state that persists across hook stages within a single evaluation (spec 4.6.1).
   *
-  * Unlike HookHints (read-only, shared), HookData is scoped to an individual hook instance.
-  * A hook stores state in `before` and retrieves it in `after`, `error`, or `finallyAfter`.
+  * Unlike HookHints (read-only, shared), HookData is scoped to an individual hook instance. A hook stores state in
+  * `before` and retrieves it in `after`, `error`, or `finallyAfter`.
   */
 final class HookData {
   private val data = new java.util.concurrent.atomic.AtomicReference(Map.empty[String, Any])

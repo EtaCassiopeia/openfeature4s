@@ -115,9 +115,9 @@ object FeatureFlagError {
   def classify(t: Throwable): FeatureFlagError = {
     val msg = Option(t.getMessage).getOrElse("")
     t match {
-      case _: java.net.UnknownHostException                                                    => Unreachable(t)
-      case _: java.net.NoRouteToHostException                                                  => Unreachable(t)
-      case _: java.net.ConnectException                                                        => Unreachable(t)
+      case _: java.net.UnknownHostException                                                   => Unreachable(t)
+      case _: java.net.NoRouteToHostException                                                 => Unreachable(t)
+      case _: java.net.ConnectException                                                       => Unreachable(t)
       case _: java.nio.channels.ClosedChannelException if msg.toLowerCase.contains("connect") => Unreachable(t)
       case _ if isHttpAuthFailure(t, msg) => Unauthorized(extractAuthReason(t, msg))
       case _                              => ProviderError(t)

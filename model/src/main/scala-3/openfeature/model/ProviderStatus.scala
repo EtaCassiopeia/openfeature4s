@@ -8,5 +8,5 @@ enum ProviderStatus:
   case Fatal
   case ShuttingDown
 
-  def canEvaluate: Boolean  = this == Ready || this == Stale
+  def canEvaluate: Boolean   = this == Ready || this == Stale
   def isRecoverable: Boolean = this != Fatal

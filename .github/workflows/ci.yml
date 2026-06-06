@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: sbt
+      - name: Setup sbt
+        uses: sbt/setup-sbt@v1
+      - name: Check formatting
+        run: sbt scalafmtCheckAll
+
+  # Build + test on every supported (JDK, Scala) pair.
+  # JDK 17 (current LTS) and JDK 21 (next LTS) cover the realistic deployment window.
+  # Scala 2.13 + 3.3 matches the crossScalaVersions declared in build.sbt.
+  # Scala 3-only modules (cats, cats-testkit, kyo, pure) are only exercised under 3.3.
+  build-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: ['17', '21']
+        scala-version: ['2.13.16', '3.3.4']
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: 'temurin'
+          cache: sbt
+      - name: Setup sbt
+        uses: sbt/setup-sbt@v1
+      - name: Compile
+        run: sbt "++${{ matrix.scala-version }} compile"
+      - name: Run tests
+        run: sbt "++${{ matrix.scala-version }} test"
+
+  # Binary-compatibility check. `mimaPreviousArtifacts` is currently empty (see build.sbt)
+  # so this is a no-op until the first post-mima release tag.
+  mima:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: sbt
+      - name: Setup sbt
+        uses: sbt/setup-sbt@v1
+      - name: Check binary compatibility
+        run: sbt +mimaReportBinaryIssues
+
+  # Single aggregated status required by branch-protection rules on main.
+  build:
+    runs-on: ubuntu-latest
+    needs: [format, build-matrix, mima]
+    if: always()
+    steps:
+      - name: Fail if any required check failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "One or more required checks did not succeed: ${{ toJson(needs) }}" >&2
+          exit 1
+      - name: All required checks passed
+        run: echo "format, build-matrix, mima all succeeded"

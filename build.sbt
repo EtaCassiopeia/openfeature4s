@@ -97,8 +97,11 @@ lazy val commonSettings = Seq(
 )
 
 // Restricts a module to Scala 3 only (no cross-compilation).
+// Also points scalafmt at .scalafmt-scala3.conf so these modules can use full Scala 3
+// syntax (given/using/braceless) without the scala213 fileOverride from the root config.
 lazy val scala3OnlySettings = Seq(
-  crossScalaVersions := Seq(scala3Version)
+  crossScalaVersions := Seq(scala3Version),
+  scalafmtConfig     := file(".scalafmt-scala3.conf")
 )
 
 // Pure data types — no effect-system dependency.

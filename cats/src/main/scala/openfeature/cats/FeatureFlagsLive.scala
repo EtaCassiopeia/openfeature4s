@@ -1,45 +1,49 @@
 package openfeature.cats
 
-import openfeature.model.*
+import openfeature.model._
 import openfeature.bridge.{ClientEvaluator, ContextConverter, ErrorCodeConverter}
 import cats.effect.{Async, IO, IOLocal, Resource}
 import cats.effect.kernel.{MonadCancel, Ref}
 import cats.effect.std.Dispatcher
-import cats.syntax.all.*
-import cats.effect.syntax.all.*
+import cats.syntax.all._
+import cats.effect.syntax.all._
 import fs2.Stream
 import fs2.concurrent.Topic
 import dev.openfeature.sdk.{
-  Client as OFClient,
+  Client => OFClient,
   EventDetails,
   FeatureProvider,
   OpenFeatureAPI,
-  ProviderEvent as JavaProviderEvent
+  ProviderEvent => JavaProviderEvent
 }
 
 import java.util.UUID
-import scala.jdk.CollectionConverters.*
+import scala.jdk.CollectionConverters._
 
 // Internal abstraction for fiber-local vs Ref-based context storage.
-private[cats] trait ContextProvider[F[_]]:
+private[cats] trait ContextProvider[F[_]] {
   def get: F[EvaluationContext]
   def set(ctx: EvaluationContext): F[Unit]
   def locally[A](ctx: EvaluationContext)(fa: F[A]): F[A]
+}
 
-private[cats] object ContextProvider:
-  def fromRef[F[_]](ref: Ref[F, EvaluationContext])(using F: MonadCancel[F, ?]): ContextProvider[F] =
-    new ContextProvider[F]:
+private[cats] object ContextProvider {
+  def fromRef[F[_]](ref: Ref[F, EvaluationContext])(implicit F: MonadCancel[F, _]): ContextProvider[F] =
+    new ContextProvider[F] {
       def get: F[EvaluationContext]            = ref.get
       def set(ctx: EvaluationContext): F[Unit] = ref.set(ctx)
       def locally[A](ctx: EvaluationContext)(fa: F[A]): F[A] =
         ref.getAndSet(ctx).bracket(_ => fa)(ref.set)
+    }
 
   def fromIOLocal(local: IOLocal[EvaluationContext]): ContextProvider[IO] =
-    new ContextProvider[IO]:
+    new ContextProvider[IO] {
       def get: IO[EvaluationContext]            = local.get
       def set(ctx: EvaluationContext): IO[Unit] = local.set(ctx)
       def locally[A](ctx: EvaluationContext)(fa: IO[A]): IO[A] =
         local.getAndSet(ctx).bracket(_ => fa)(local.set)
+    }
+}
 
 /** Internal implementation — not part of the public API. */
 private[cats] class FeatureFlagsLive[F[_]](
@@ -49,8 +53,8 @@ private[cats] class FeatureFlagsLive[F[_]](
   hooksRef: Ref[F, List[FeatureHook[F]]],
   topic: Topic[F, Option[ProviderEvent]],
   statusRef: Ref[F, ProviderStatus]
-)(using F: Async[F])
-    extends FeatureFlags[F]:
+)(implicit F: Async[F])
+    extends FeatureFlags[F] {
 
   private def resolvedContext(callCtx: EvaluationContext): F[EvaluationContext] =
     (globalCtxRef.get, localCtx.get).mapN(_.merge(_).merge(callCtx))
@@ -60,11 +64,11 @@ private[cats] class FeatureFlagsLive[F[_]](
     default: A,
     callCtx: EvaluationContext,
     typeName: String
-  )(using ft: FlagType[A]): F[FlagResolution[A]] =
-    for
+  )(implicit ft: FlagType[A]): F[FlagResolution[A]] =
+    for {
       ctx <- resolvedContext(callCtx)
       ofCtx = ContextConverter.toOpenFeature(ctx)
-      result <- ClientEvaluator.evaluateStandard(typeName, client, key.value, default, ofCtx) match
+      result <- ClientEvaluator.evaluateStandard(typeName, client, key.value, default, ofCtx) match {
         case Some(erased) =>
           F.blocking(erased.call())
             .map { details =>
@@ -81,16 +85,18 @@ private[cats] class FeatureFlagsLive[F[_]](
             }
         case None =>
           F.blocking {
-            ft.decode(client.getObjectDetails(key.value, null, ofCtx).getValue) match
+            ft.decode(client.getObjectDetails(key.value, null, ofCtx).getValue) match {
               case Right(v)  => FlagResolution(v, None, ResolutionReason.Default, FlagMetadata.empty, key.value)
               case Left(msg) => FlagResolution.error(key.value, default, ErrorCode.TypeMismatch, msg)
+            }
           }.recover { case ex =>
             val err = FeatureFlagError.classify(ex)
             FlagResolution.error(key.value, default, FeatureFlagError.toErrorCode(err), err.message)
           }
-    yield result
+      }
+    } yield result
 
-  private def resolveReason(r: String): ResolutionReason = r match
+  private def resolveReason(r: String): ResolutionReason = r match {
     case "STATIC"          => ResolutionReason.Static
     case "DEFAULT"         => ResolutionReason.Default
     case "TARGETING_MATCH" => ResolutionReason.TargetingMatch
@@ -100,6 +106,7 @@ private[cats] class FeatureFlagsLive[F[_]](
     case "STALE"           => ResolutionReason.Stale
     case "ERROR"           => ResolutionReason.Error
     case _                 => ResolutionReason.Unknown
+  }
 
   def booleanDetails(key: FlagKey, default: Boolean, ctx: EvaluationContext): F[FlagResolution[Boolean]] =
     evaluate(key, default, ctx, "Boolean")
@@ -130,16 +137,17 @@ private[cats] class FeatureFlagsLive[F[_]](
 
   def events: Stream[F, ProviderEvent]  = topic.subscribe(128).unNoneTerminate
   def providerStatus: F[ProviderStatus] = statusRef.get
+}
 
-private[cats] object FeatureFlagsLive:
+private[cats] object FeatureFlagsLive {
   def make[F[_]](
     provider: FeatureProvider,
     localCtxProvider: F[ContextProvider[F]]
-  )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
+  )(implicit F: Async[F]): Resource[F, FeatureFlags[F]] =
     Dispatcher.parallel[F].flatMap { dispatcher =>
       Resource
         .make(
-          acquire = for
+          acquire = for {
             globalCtxRef <- Ref.of[F, EvaluationContext](EvaluationContext.empty)
             localCtx     <- localCtxProvider
             hooksRef     <- Ref.of[F, List[FeatureHook[F]]](Nil)
@@ -151,10 +159,10 @@ private[cats] object FeatureFlagsLive:
             _ <- statusRef.set(ProviderStatus.Ready)
             client = api.getClient(domain)
             _ <- F.delay(registerEventHandlers(client, provider, dispatcher, statusRef, topic))
-          yield (new FeatureFlagsLive[F](client, globalCtxRef, localCtx, hooksRef, topic, statusRef), topic)
+          } yield (new FeatureFlagsLive[F](client, globalCtxRef, localCtx, hooksRef, topic, statusRef), topic)
         )(release = { case (_, topic) =>
           F.delay(provider.shutdown()).attempt.void *>
-            topic.publish1(None).attempt.void // signals stream subscribers to terminate
+            topic.publish1(None).attempt.void
         })
         .map(_._1)
     }
@@ -165,7 +173,7 @@ private[cats] object FeatureFlagsLive:
     dispatcher: Dispatcher[F],
     statusRef: Ref[F, ProviderStatus],
     topic: Topic[F, Option[ProviderEvent]]
-  )(using F: Async[F]): Unit =
+  )(implicit F: Async[F]): Unit = {
     val meta = ProviderMetadata(provider.getMetadata.getName)
 
     def publish(event: ProviderEvent, newStatus: ProviderStatus): Unit =
@@ -179,12 +187,13 @@ private[cats] object FeatureFlagsLive:
     )
     client.on(
       JavaProviderEvent.PROVIDER_ERROR,
-      (d: EventDetails) =>
+      (d: EventDetails) => {
         val errCode = Option(d.getErrorCode).map(ErrorCodeConverter.fromJava)
         publish(
           ProviderEvent.Error(new RuntimeException(d.getMessage), meta, errCode, Option(d.getMessage)),
           ProviderStatus.Error
         )
+      }
     )
     client.on(
       JavaProviderEvent.PROVIDER_STALE,
@@ -192,7 +201,10 @@ private[cats] object FeatureFlagsLive:
     )
     client.on(
       JavaProviderEvent.PROVIDER_CONFIGURATION_CHANGED,
-      (d: EventDetails) =>
+      (d: EventDetails) => {
         val changed = Option(d.getFlagsChanged).fold(Set.empty[String])(_.asScala.toSet)
         publish(ProviderEvent.ConfigurationChanged(changed, meta), ProviderStatus.Ready)
+      }
     )
+  }
+}

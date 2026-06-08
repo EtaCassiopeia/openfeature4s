@@ -1,9 +1,9 @@
 package openfeature.cats
 
-import openfeature.model.*
+import openfeature.model._
 import cats.effect.{Async, IO, IOLocal, Resource}
 import cats.effect.kernel.{MonadCancel, Ref}
-import cats.syntax.all.*
+import cats.syntax.all._
 import fs2.Stream
 
 /** Cats Effect 3 / FS2 client for OpenFeature flag evaluation.
@@ -23,7 +23,8 @@ import fs2.Stream
   * ==Thread safety==
   * All state (`Ref`, `IOLocal`, `Topic`) is safe for concurrent access.
   */
-trait FeatureFlags[F[_]]:
+trait FeatureFlags[F[_]] {
+
   // Detailed evaluation — returns full [[FlagResolution]] including metadata, reason, and variant
 
   def booleanDetails(
@@ -98,14 +99,16 @@ trait FeatureFlags[F[_]]:
   def events: Stream[F, ProviderEvent]
 
   def providerStatus: F[ProviderStatus]
+}
 
-object FeatureFlags:
+object FeatureFlags {
+
   /** Create a `FeatureFlags[F]` backed by the given Java SDK provider.
     *
     * `withContext` uses a `Ref`-based bracket — sequential fiber contexts, not isolated. For true fiber isolation (two
     * concurrent fibers maintain independent evaluation contexts) use [[makeIO]].
     */
-  def make[F[_]](provider: dev.openfeature.sdk.FeatureProvider)(using F: Async[F]): Resource[F, FeatureFlags[F]] =
+  def make[F[_]](provider: dev.openfeature.sdk.FeatureProvider)(implicit F: Async[F]): Resource[F, FeatureFlags[F]] =
     FeatureFlagsLive.make[F](
       provider,
       localCtxProvider = Ref.of[F, EvaluationContext](EvaluationContext.empty).map(ContextProvider.fromRef(_))
@@ -121,3 +124,4 @@ object FeatureFlags:
       .flatMap(local =>
         FeatureFlagsLive.make[IO](provider, localCtxProvider = IO.pure(ContextProvider.fromIOLocal(local)))
       )
+}

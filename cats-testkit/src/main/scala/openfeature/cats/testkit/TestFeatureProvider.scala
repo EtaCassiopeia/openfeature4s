@@ -124,7 +124,7 @@ final class TestFeatureProvider[F[_]] private (
   // Lifecycle
 
   def setStatus(status: ProviderStatus): F[Unit] =
-    statusRef.set(status) *> F.delay:
+    val updateJavaState: F[Unit] = F.delay {
       status match
         case ProviderStatus.Ready =>
           javaState.set(ProviderState.READY)
@@ -134,7 +134,10 @@ final class TestFeatureProvider[F[_]] private (
         case ProviderStatus.Stale        => javaState.set(ProviderState.STALE)
         case ProviderStatus.Fatal        => javaState.set(ProviderState.FATAL)
         case ProviderStatus.ShuttingDown => javaState.set(ProviderState.NOT_READY)
-      *> readySignal.filter(_ => status == ProviderStatus.Ready).traverse_(_.get)
+    }
+    val awaitReady: F[Unit] =
+      readySignal.filter(_ => status == ProviderStatus.Ready).traverse_(_.get)
+    statusRef.set(status) *> updateJavaState *> awaitReady
 
   def getStatus: F[ProviderStatus] = statusRef.get
 

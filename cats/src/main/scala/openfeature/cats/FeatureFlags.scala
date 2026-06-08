@@ -1,7 +1,7 @@
 package openfeature.cats
 
 import openfeature.model.*
-import cats.effect.{Async, IO, IOLocal, Resource}
+import cats.effect.{Async, Deferred, IO, IOLocal, Resource}
 import cats.effect.kernel.{MonadCancel, Ref}
 import cats.syntax.all.*
 import fs2.Stream
@@ -110,6 +110,22 @@ object FeatureFlags:
   def make[F[_]](provider: dev.openfeature.sdk.FeatureProvider)(using F: Async[F]): Resource[F, FeatureFlags[F]] =
     FeatureFlagsLive.make[F](
       provider,
+      localCtxProvider = Ref.of[F, EvaluationContext](EvaluationContext.empty).map(ContextProvider.fromRef(_))
+    )
+
+  /** Create a `FeatureFlags[F]` for a provider that starts in `NotReady` state.
+    *
+    * Uses `setProvider` (non-blocking), so resource acquisition completes before the provider is ready.
+    * The optional `onReady` deferred is completed when the Java SDK fires `PROVIDER_READY`, which lets
+    * a `TestFeatureProvider` synchronize `setStatus(Ready)` with SDK event propagation.
+    */
+  def makeAsync[F[_]](
+    provider: dev.openfeature.sdk.FeatureProvider,
+    onReady: Option[Deferred[F, Unit]] = None
+  )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
+    FeatureFlagsLive.makeAsync[F](
+      provider,
+      onReady,
       localCtxProvider = Ref.of[F, EvaluationContext](EvaluationContext.empty).map(ContextProvider.fromRef(_))
     )
 

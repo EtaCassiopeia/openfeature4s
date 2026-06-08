@@ -219,8 +219,11 @@ lazy val catsTestkit = (project in file("cats-testkit"))
     name := "openfeature4s-cats-testkit",
     commonSettings,
     scala3OnlySettings,
+    testFrameworks += new TestFramework("munit.Framework"),
     libraryDependencies ++= Seq(
-      "org.typelevel" %% "cats-effect" % catsEffectVersion
+      "org.typelevel" %% "cats-effect"       % catsEffectVersion,
+      "co.fs2"        %% "fs2-core"          % fs2Version,
+      "org.typelevel" %% "munit-cats-effect" % "2.0.0" % Test
     )
   )
 

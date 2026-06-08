@@ -2,7 +2,7 @@ package openfeature.cats
 
 import openfeature.model.*
 import openfeature.bridge.{ClientEvaluator, ContextConverter, ErrorCodeConverter}
-import cats.effect.{Async, IO, IOLocal, Resource}
+import cats.effect.{Async, Deferred, IO, IOLocal, Resource}
 import cats.effect.kernel.{MonadCancel, Ref}
 import cats.effect.std.Dispatcher
 import cats.syntax.all.*
@@ -159,12 +159,44 @@ private[cats] object FeatureFlagsLive:
         .map(_._1)
     }
 
+  /** Non-blocking variant: uses `setProvider` so resource acquisition completes before the provider reaches READY.
+    *
+    * `onReady` is completed when the Java SDK fires PROVIDER_READY, allowing callers to synchronize on readiness.
+    */
+  def makeAsync[F[_]](
+    provider: FeatureProvider,
+    onReady: Option[Deferred[F, Unit]],
+    localCtxProvider: F[ContextProvider[F]]
+  )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
+    Dispatcher.parallel[F].flatMap { dispatcher =>
+      Resource
+        .make(
+          acquire = for
+            globalCtxRef <- Ref.of[F, EvaluationContext](EvaluationContext.empty)
+            localCtx     <- localCtxProvider
+            hooksRef     <- Ref.of[F, List[FeatureHook[F]]](Nil)
+            statusRef    <- Ref.of[F, ProviderStatus](ProviderStatus.NotReady)
+            topic        <- Topic[F, Option[ProviderEvent]]
+            api          <- F.delay(OpenFeatureAPI.getInstance())
+            domain = s"openfeature4s-cats-${UUID.randomUUID()}"
+            _ <- F.delay(api.setProvider(domain, provider))
+            client = api.getClient(domain)
+            _ <- F.delay(registerEventHandlers(client, provider, dispatcher, statusRef, topic, onReady))
+          yield (new FeatureFlagsLive[F](client, globalCtxRef, localCtx, hooksRef, topic, statusRef), topic)
+        )(release = { case (_, topic) =>
+          F.delay(provider.shutdown()).attempt.void *>
+            topic.publish1(None).attempt.void
+        })
+        .map(_._1)
+    }
+
   private def registerEventHandlers[F[_]](
     client: OFClient,
     provider: FeatureProvider,
     dispatcher: Dispatcher[F],
     statusRef: Ref[F, ProviderStatus],
-    topic: Topic[F, Option[ProviderEvent]]
+    topic: Topic[F, Option[ProviderEvent]],
+    onReady: Option[Deferred[F, Unit]] = None
   )(using F: Async[F]): Unit =
     val meta = ProviderMetadata(provider.getMetadata.getName)
 
@@ -175,7 +207,12 @@ private[cats] object FeatureFlagsLive:
 
     client.on(
       JavaProviderEvent.PROVIDER_READY,
-      (_: EventDetails) => publish(ProviderEvent.Ready(meta), ProviderStatus.Ready)
+      (_: EventDetails) =>
+        dispatcher.unsafeRunAndForget(
+          statusRef.set(ProviderStatus.Ready) *>
+            topic.publish1(Some(ProviderEvent.Ready(meta))).void *>
+            onReady.fold(F.unit)(_.complete(()).void)
+        )
     )
     client.on(
       JavaProviderEvent.PROVIDER_ERROR,

@@ -115,9 +115,9 @@ object FeatureFlags:
 
   /** Create a `FeatureFlags[F]` for a provider that starts in `NotReady` state.
     *
-    * Uses `setProvider` (non-blocking), so resource acquisition completes before the provider is ready.
-    * The optional `onReady` deferred is completed when the Java SDK fires `PROVIDER_READY`, which lets
-    * a `TestFeatureProvider` synchronize `setStatus(Ready)` with SDK event propagation.
+    * Uses `setProvider` (non-blocking), so resource acquisition completes before the provider is ready. The optional
+    * `onReady` deferred is completed when the Java SDK fires `PROVIDER_READY`, which lets a `TestFeatureProvider`
+    * synchronize `setStatus(Ready)` with SDK event propagation.
     */
   def makeAsync[F[_]](
     provider: dev.openfeature.sdk.FeatureProvider,

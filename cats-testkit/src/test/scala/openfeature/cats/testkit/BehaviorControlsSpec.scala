@@ -28,11 +28,11 @@ class BehaviorControlsSpec extends CatsEffectSuite:
 
   fixture.test("removeFlag removes a specific flag") { case (provider, flags) =>
     for
-      _   <- provider.setFlag(FlagKey("a"), "hello")
-      _   <- provider.setFlag(FlagKey("b"), "world")
-      _   <- provider.removeFlag(FlagKey("a"))
-      ra  <- flags.string(FlagKey("a"), "default")
-      rb  <- flags.string(FlagKey("b"), "default")
+      _  <- provider.setFlag(FlagKey("a"), "hello")
+      _  <- provider.setFlag(FlagKey("b"), "world")
+      _  <- provider.removeFlag(FlagKey("a"))
+      ra <- flags.string(FlagKey("a"), "default")
+      rb <- flags.string(FlagKey("b"), "default")
     yield
       assert(ra == "default")
       assert(rb == "world")

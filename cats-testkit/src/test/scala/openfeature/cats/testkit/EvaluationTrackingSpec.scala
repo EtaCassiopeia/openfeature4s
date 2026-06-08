@@ -39,9 +39,9 @@ class EvaluationTrackingSpec extends CatsEffectSuite:
 
   fixture.test("clearEvaluations resets tracking") { case (provider, flags) =>
     for
-      _  <- flags.boolean(FlagKey("flag"), false)
-      _  <- provider.clearEvaluations
-      n  <- provider.evaluationCount(FlagKey("flag"))
+      _ <- flags.boolean(FlagKey("flag"), false)
+      _ <- provider.clearEvaluations
+      n <- provider.evaluationCount(FlagKey("flag"))
     yield assert(n == 0)
   }
 

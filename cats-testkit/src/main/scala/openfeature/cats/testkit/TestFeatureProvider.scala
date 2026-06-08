@@ -10,7 +10,7 @@ import cats.syntax.all.*
 import fs2.Stream
 import fs2.concurrent.Topic
 import dev.openfeature.sdk.{
-  EvaluationContext => OFEvaluationContext,
+  EvaluationContext as OFEvaluationContext,
   EventProvider,
   ImmutableMetadata,
   Metadata,
@@ -85,16 +85,28 @@ final class TestFeatureProvider[F[_]] private (
       .reason(if flags.containsKey(key) then "TARGETING_MATCH" else "DEFAULT")
       .build()
 
-  override def getBooleanEvaluation(key: String, default: java.lang.Boolean, ctx: OFEvaluationContext): ProviderEvaluation[java.lang.Boolean] =
+  override def getBooleanEvaluation(
+    key: String,
+    default: java.lang.Boolean,
+    ctx: OFEvaluationContext
+  ): ProviderEvaluation[java.lang.Boolean] =
     evalResult(key, default, _.asInstanceOf[Boolean])
 
   override def getStringEvaluation(key: String, default: String, ctx: OFEvaluationContext): ProviderEvaluation[String] =
     evalResult(key, default, _.toString)
 
-  override def getIntegerEvaluation(key: String, default: java.lang.Integer, ctx: OFEvaluationContext): ProviderEvaluation[java.lang.Integer] =
+  override def getIntegerEvaluation(
+    key: String,
+    default: java.lang.Integer,
+    ctx: OFEvaluationContext
+  ): ProviderEvaluation[java.lang.Integer] =
     evalResult(key, default, { case i: Int => i; case n: Number => n.intValue() })
 
-  override def getDoubleEvaluation(key: String, default: java.lang.Double, ctx: OFEvaluationContext): ProviderEvaluation[java.lang.Double] =
+  override def getDoubleEvaluation(
+    key: String,
+    default: java.lang.Double,
+    ctx: OFEvaluationContext
+  ): ProviderEvaluation[java.lang.Double] =
     evalResult(key, default, { case d: Double => d; case n: Number => n.doubleValue() })
 
   override def getObjectEvaluation(key: String, default: Value, ctx: OFEvaluationContext): ProviderEvaluation[Value] =
@@ -102,10 +114,12 @@ final class TestFeatureProvider[F[_]] private (
 
   // Flag management
 
-  def setFlag[A](key: FlagKey, value: A): F[Unit]       = F.delay(flags.put(key.value, value)).void
-  def setFlags(newFlags: Map[FlagKey, Any]): F[Unit]     = F.delay { flags.clear(); newFlags.foreach { case (k, v) => flags.put(k.value, v) } }
-  def removeFlag(key: FlagKey): F[Unit]                  = F.delay(flags.remove(key.value)).void
-  def clearFlags: F[Unit]                                = F.delay(flags.clear())
+  def setFlag[A](key: FlagKey, value: A): F[Unit] = F.delay(flags.put(key.value, value)).void
+  def setFlags(newFlags: Map[FlagKey, Any]): F[Unit] = F.delay {
+    flags.clear(); newFlags.foreach { case (k, v) => flags.put(k.value, v) }
+  }
+  def removeFlag(key: FlagKey): F[Unit] = F.delay(flags.remove(key.value)).void
+  def clearFlags: F[Unit]               = F.delay(flags.clear())
 
   // Lifecycle
 
@@ -120,7 +134,7 @@ final class TestFeatureProvider[F[_]] private (
         case ProviderStatus.Stale        => javaState.set(ProviderState.STALE)
         case ProviderStatus.Fatal        => javaState.set(ProviderState.FATAL)
         case ProviderStatus.ShuttingDown => javaState.set(ProviderState.NOT_READY)
-    *> readySignal.filter(_ => status == ProviderStatus.Ready).traverse_(_.get)
+      *> readySignal.filter(_ => status == ProviderStatus.Ready).traverse_(_.get)
 
   def getStatus: F[ProviderStatus] = statusRef.get
 
@@ -202,9 +216,9 @@ object TestFeatureProvider:
 
   /** Create a `(TestFeatureProvider, FeatureFlags)` pair where the provider starts in `NotReady` state.
     *
-    * Uses `setProvider` (non-blocking) so resource acquisition completes before the provider is ready.
-    * Call `provider.setStatus(ProviderStatus.Ready)` to simulate the provider becoming ready.
-    * `setStatus(Ready)` synchronizes with the Java SDK's PROVIDER_READY event before returning.
+    * Uses `setProvider` (non-blocking) so resource acquisition completes before the provider is ready. Call
+    * `provider.setStatus(ProviderStatus.Ready)` to simulate the provider becoming ready. `setStatus(Ready)`
+    * synchronizes with the Java SDK's PROVIDER_READY event before returning.
     */
   def makeAsync[F[_]](
     initialFlags: Map[FlagKey, Any] = Map.empty
@@ -227,8 +241,19 @@ object TestFeatureProvider:
     yield
       val flags = new ConcurrentHashMap[String, Any]()
       initialFlags.foreach { case (k, v) => flags.put(k.value, v) }
-      val javaState   = new AtomicReference[ProviderState](if notReady then ProviderState.NOT_READY else ProviderState.READY)
+      val javaState =
+        new AtomicReference[ProviderState](if notReady then ProviderState.NOT_READY else ProviderState.READY)
       val evaluations = new CopyOnWriteArrayList[(String, OFEvaluationContext)]()
       val initLatch   = if notReady then Some(new CountDownLatch(1)) else None
       val behaviorRef = new AtomicReference[BehaviorConfig](BehaviorConfig())
-      new TestFeatureProvider[F](flags, javaState, evaluations, topic, statusRef, initLatch, readySignal, behaviorRef, dispatcher)
+      new TestFeatureProvider[F](
+        flags,
+        javaState,
+        evaluations,
+        topic,
+        statusRef,
+        initLatch,
+        readySignal,
+        behaviorRef,
+        dispatcher
+      )

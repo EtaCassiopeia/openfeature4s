@@ -20,7 +20,7 @@ class AsyncReadyLayerSpec extends CatsEffectSuite:
 
   fixture.test("setStatus(Ready) transitions provider to Ready") { case (provider, _) =>
     for
-      _     <- provider.setStatus(ProviderStatus.Ready)
+      _      <- provider.setStatus(ProviderStatus.Ready)
       status <- provider.getStatus
     yield assert(status == ProviderStatus.Ready)
   }
@@ -44,7 +44,7 @@ class AsyncReadyLayerSpec extends CatsEffectSuite:
 
   fixture.test("provider can cycle through multiple status transitions") { case (provider, _) =>
     for
-      _ <- provider.setStatus(ProviderStatus.Ready)
+      _  <- provider.setStatus(ProviderStatus.Ready)
       s1 <- provider.getStatus
       _  <- provider.setStatus(ProviderStatus.Stale)
       s2 <- provider.getStatus

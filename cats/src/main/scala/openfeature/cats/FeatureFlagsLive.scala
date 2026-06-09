@@ -206,16 +206,23 @@ private[cats] object FeatureFlagsLive:
         fa.handleErrorWith(e => F.delay(System.err.println(s"[openfeature4s] event handler error: ${e.getMessage}")))
       )
 
+    def publishToTopic(event: ProviderEvent): F[Unit] =
+      topic.publish1(Some(event)).flatMap {
+        case Right(()) => F.unit
+        case Left(_)   => F.raiseError(new IllegalStateException(s"[openfeature4s] event topic closed: $event"))
+      }
+
     def publish(event: ProviderEvent, newStatus: ProviderStatus): Unit =
-      safeRunAndForget(statusRef.set(newStatus) *> topic.publish1(Some(event)).void)
+      safeRunAndForget(statusRef.set(newStatus) *> publishToTopic(event))
 
     client.on(
       JavaProviderEvent.PROVIDER_READY,
       (_: EventDetails) =>
+        // guarantee ensures onReady is completed even if the topic publish fails,
+        // so setStatus(Ready) callers are never permanently suspended.
         safeRunAndForget(
-          statusRef.set(ProviderStatus.Ready) *>
-            topic.publish1(Some(ProviderEvent.Ready(meta))).void *>
-            onReady.fold(F.unit)(_.complete(()).void)
+          (statusRef.set(ProviderStatus.Ready) *> publishToTopic(ProviderEvent.Ready(meta)))
+            .guarantee(onReady.fold(F.unit)(_.complete(()).void))
         )
     )
     client.on(

@@ -83,8 +83,8 @@ final class TestFeatureProvider[F[_]] private (
     default: A,
     convert: Any => A
   ): ProviderEvaluation[A] =
+    evaluations.add((key, ctx)) // record attempt before any injected failure
     applyBehavior()
-    evaluations.add((key, ctx))
     val value = Option(flags.get(key)).fold(default)(convert)
     ProviderEvaluation
       .builder[A]()
@@ -132,10 +132,11 @@ final class TestFeatureProvider[F[_]] private (
 
   def setStatus(status: ProviderStatus): F[Unit] =
     val updateJavaState: F[Unit] = F.delay {
+      // Always release initLatch — countDown on a zero latch is a no-op.
+      // Without this, setStatus(Error) before Ready leaves initialize() blocked.
+      initLatch.foreach(_.countDown())
       status match
-        case ProviderStatus.Ready =>
-          javaState.set(ProviderState.READY)
-          initLatch.foreach(_.countDown())
+        case ProviderStatus.Ready        => javaState.set(ProviderState.READY)
         case ProviderStatus.NotReady     => javaState.set(ProviderState.NOT_READY)
         case ProviderStatus.Error        => javaState.set(ProviderState.ERROR)
         case ProviderStatus.Stale        => javaState.set(ProviderState.STALE)
@@ -160,22 +161,28 @@ final class TestFeatureProvider[F[_]] private (
   def events: Stream[F, ProviderEvent] = topic.subscribe(128).unNoneTerminate
 
   def emitEvent(event: ProviderEvent): F[Unit] =
-    topic.publish1(Some(event)).void *> F.delay:
-      event match
-        case ProviderEvent.Ready(_, _) =>
-          emitProviderReady(ProviderEventDetails.builder().build())
-        case ProviderEvent.Error(_, _, errorCode, errorMessage, _) =>
-          val b = ProviderEventDetails.builder()
-          errorMessage.foreach(b.message)
-          errorCode.foreach(ec => b.errorCode(ErrorCodeConverter.toJava(ec)))
-          emitProviderError(b.build())
-        case ProviderEvent.Stale(reason, _, _) =>
-          emitProviderStale(ProviderEventDetails.builder().message(reason).build())
-        case ProviderEvent.ConfigurationChanged(changed, _, _) =>
-          emitProviderConfigurationChanged(
-            ProviderEventDetails.builder().flagsChanged(changed.toList.asJava).build()
-          )
-        case ProviderEvent.Reconnecting(_, _) => ()
+    topic.publish1(Some(event)).flatMap {
+      case Left(_) =>
+        F.raiseError(new IllegalStateException("[openfeature4s] cannot emit event: provider topic is closed"))
+      case Right(()) =>
+        F.delay {
+          event match
+            case ProviderEvent.Ready(_, _) =>
+              emitProviderReady(ProviderEventDetails.builder().build())
+            case ProviderEvent.Error(_, _, errorCode, errorMessage, _) =>
+              val b = ProviderEventDetails.builder()
+              errorMessage.foreach(b.message)
+              errorCode.foreach(ec => b.errorCode(ErrorCodeConverter.toJava(ec)))
+              emitProviderError(b.build())
+            case ProviderEvent.Stale(reason, _, _) =>
+              emitProviderStale(ProviderEventDetails.builder().message(reason).build())
+            case ProviderEvent.ConfigurationChanged(changed, _, _) =>
+              emitProviderConfigurationChanged(
+                ProviderEventDetails.builder().flagsChanged(changed.toList.asJava).build()
+              )
+            case ProviderEvent.Reconnecting(_, _) => ()
+        }
+    }
 
   // Behavior controls
 
@@ -220,22 +227,26 @@ object TestFeatureProvider:
   )(using F: Async[F]): Resource[F, (TestFeatureProvider[F], FeatureFlags[F])] =
     Dispatcher.parallel[F].flatMap { dispatcher =>
       Resource.eval(buildProvider[F](initialFlags, notReady = false, dispatcher)).flatMap { provider =>
-        FeatureFlags.make[F](provider).map(flags => (provider, flags))
+        Resource
+          .make(F.pure(provider))(p => p.topic.publish1(None).attempt.void)
+          .flatMap(p => FeatureFlags.make[F](p).map(flags => (p, flags)))
       }
     }
 
   /** Create a `(TestFeatureProvider, FeatureFlags)` pair where the provider starts in `NotReady` state.
     *
     * Uses `setProvider` (non-blocking) so resource acquisition completes before the provider is ready. Call
-    * `provider.setStatus(ProviderStatus.Ready)` to simulate the provider becoming ready. `setStatus(Ready)`
-    * synchronizes with the Java SDK's PROVIDER_READY event before returning.
+    * `provider.setStatus(ProviderStatus.Ready)` to simulate the provider becoming ready. `setStatus(Ready)` suspends
+    * until the Java SDK fires PROVIDER_READY and both `statusRef` and the event topic have been updated.
     */
   def makeAsync[F[_]](
     initialFlags: Map[FlagKey, Any] = Map.empty
   )(using F: Async[F]): Resource[F, (TestFeatureProvider[F], FeatureFlags[F])] =
     Dispatcher.parallel[F].flatMap { dispatcher =>
       Resource.eval(buildProvider[F](initialFlags, notReady = true, dispatcher)).flatMap { provider =>
-        FeatureFlags.makeAsync[F](provider, provider.readySignal).map(flags => (provider, flags))
+        Resource
+          .make(F.pure(provider))(p => p.topic.publish1(None).attempt.void)
+          .flatMap(p => FeatureFlags.makeAsync[F](p, p.readySignal).map(flags => (p, flags)))
       }
     }
 

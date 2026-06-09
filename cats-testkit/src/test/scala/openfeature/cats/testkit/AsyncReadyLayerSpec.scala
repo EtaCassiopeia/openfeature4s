@@ -29,8 +29,6 @@ class AsyncReadyLayerSpec extends CatsEffectSuite:
     for
       _ <- provider.setFlag(FlagKey("x"), "value")
       _ <- provider.setStatus(ProviderStatus.Ready)
-      // Give the SDK event bridge a moment to process the PROVIDER_READY event
-      _ <- IO.sleep(scala.concurrent.duration.FiniteDuration(100, "ms"))
       r <- flags.string(FlagKey("x"), "")
     yield assert(r == "value")
   }

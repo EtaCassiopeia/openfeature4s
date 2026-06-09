@@ -53,3 +53,9 @@ class AsyncReadyLayerSpec extends CatsEffectSuite:
       assert(s2 == ProviderStatus.Stale)
       assert(s3 == ProviderStatus.Ready)
   }
+
+  fixture.test("setStatus(Ready) does not deadlock") { case (provider, _) =>
+    // Regression guard: if Deferred synchronization breaks, this hangs and fails
+    // via munit-cats-effect's global test timeout.
+    provider.setStatus(ProviderStatus.Ready)
+  }

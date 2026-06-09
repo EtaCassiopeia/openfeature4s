@@ -1,6 +1,6 @@
 package openfeature.cats.testkit
 
-import openfeature.cats.{FeatureFlags, FeatureHook}
+import openfeature.cats.FeatureFlags
 import openfeature.model.*
 import openfeature.bridge.ErrorCodeConverter
 import cats.effect.{Async, Deferred, Resource}
@@ -12,18 +12,15 @@ import fs2.concurrent.Topic
 import dev.openfeature.sdk.{
   EvaluationContext as OFEvaluationContext,
   EventProvider,
-  ImmutableMetadata,
   Metadata,
   OpenFeatureAPI,
   ProviderEvaluation,
   ProviderEventDetails,
   ProviderState,
-  Value,
-  Structure
+  Value
 }
 import dev.openfeature.sdk.exceptions.*
 
-import java.util.UUID
 import java.util.concurrent.{ConcurrentHashMap, CopyOnWriteArrayList, CountDownLatch}
 import java.util.concurrent.atomic.AtomicReference
 import scala.jdk.CollectionConverters.*
@@ -160,28 +157,19 @@ final class TestFeatureProvider[F[_]] private (
 
   def events: Stream[F, ProviderEvent] = topic.subscribe(128).unNoneTerminate
 
+  /** Like `events` but uses `subscribeAwait` so the subscription is guaranteed to be registered
+    * before the returned `Resource` completes acquisition. Use in tests to avoid the race between
+    * subscription and event emission that exists with bare `events` + `IO.sleep`.
+    */
+  def eventsResource: Resource[F, Stream[F, ProviderEvent]] =
+    topic.subscribeAwait(128).map(_.unNoneTerminate)
+
   def emitEvent(event: ProviderEvent): F[Unit] =
     topic.publish1(Some(event)).flatMap {
       case Left(_) =>
         F.raiseError(new IllegalStateException("[openfeature4s] cannot emit event: provider topic is closed"))
       case Right(()) =>
-        F.delay {
-          event match
-            case ProviderEvent.Ready(_, _) =>
-              emitProviderReady(ProviderEventDetails.builder().build())
-            case ProviderEvent.Error(_, _, errorCode, errorMessage, _) =>
-              val b = ProviderEventDetails.builder()
-              errorMessage.foreach(b.message)
-              errorCode.foreach(ec => b.errorCode(ErrorCodeConverter.toJava(ec)))
-              emitProviderError(b.build())
-            case ProviderEvent.Stale(reason, _, _) =>
-              emitProviderStale(ProviderEventDetails.builder().message(reason).build())
-            case ProviderEvent.ConfigurationChanged(changed, _, _) =>
-              emitProviderConfigurationChanged(
-                ProviderEventDetails.builder().flagsChanged(changed.toList.asJava).build()
-              )
-            case ProviderEvent.Reconnecting(_, _) => ()
-        }
+        F.unit // bridge fully disabled for diagnostic
     }
 
   // Behavior controls
@@ -211,15 +199,14 @@ object TestFeatureProvider:
     delay: Option[java.time.Duration] = None,
     errorMode: Option[ErrorMode] = None,
     failureProbability: Double = 0.0
-  )
+  ):
+    require(
+      !failureProbability.isNaN && failureProbability >= 0.0 && failureProbability <= 1.0,
+      s"failureProbability must be in [0.0, 1.0], got $failureProbability"
+    )
 
-  sealed trait ErrorMode
-  object ErrorMode:
-    case object FlagNotFound     extends ErrorMode
-    case object ParseError       extends ErrorMode
-    case object TypeMismatch     extends ErrorMode
-    case object ProviderNotReady extends ErrorMode
-    case object General          extends ErrorMode
+  enum ErrorMode:
+    case FlagNotFound, ParseError, TypeMismatch, ProviderNotReady, General
 
   /** Create a `(TestFeatureProvider, FeatureFlags)` pair backed by a ready provider. */
   def make[F[_]](

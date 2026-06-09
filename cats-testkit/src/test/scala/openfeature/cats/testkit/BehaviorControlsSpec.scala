@@ -83,3 +83,99 @@ class BehaviorControlsSpec extends CatsEffectSuite:
       r <- flags.boolean(FlagKey("k"), false)
     yield assert(r == true)
   }
+
+  fixture.test("setFlags replaces all flags atomically") { case (provider, flags) =>
+    for
+      _    <- provider.setFlag(FlagKey("a"), "original")
+      _    <- provider.setFlag(FlagKey("b"), "keep")
+      _    <- provider.setFlags(Map(FlagKey("b") -> "updated", FlagKey("c") -> "new"))
+      a    <- flags.string(FlagKey("a"), "default")
+      b    <- flags.string(FlagKey("b"), "default")
+      c    <- flags.string(FlagKey("c"), "default")
+    yield
+      assertEquals(a, "default") // removed by setFlags
+      assertEquals(b, "updated")
+      assertEquals(c, "new")
+  }
+
+  fixture.test("setDelay adds latency without breaking evaluation") { case (provider, flags) =>
+    for
+      _ <- provider.setFlag(FlagKey("k"), true)
+      _ <- provider.setDelay(Duration.ofMillis(50))
+      r <- flags.boolean(FlagKey("k"), false)
+      _ <- provider.clearDelay
+    yield assertEquals(r, true)
+  }
+
+  fixture.test("clearDelay removes the delay") { case (provider, flags) =>
+    for
+      _ <- provider.setFlag(FlagKey("k"), true)
+      _ <- provider.setDelay(Duration.ofMillis(50))
+      _ <- provider.clearDelay
+      r <- flags.boolean(FlagKey("k"), false)
+    yield assertEquals(r, true)
+  }
+
+  fixture.test("double flag evaluates correctly") { case (provider, flags) =>
+    for
+      _ <- provider.setFlag(FlagKey("d"), 3.14)
+      r <- flags.double(FlagKey("d"), 0.0)
+    yield assertEqualsDouble(r, 3.14, 0.001)
+  }
+
+  fixture.test("long flag evaluates correctly") { case (provider, flags) =>
+    val big = Int.MaxValue.toLong + 1L
+    for
+      _ <- provider.setFlag(FlagKey("l"), big)
+      r <- flags.long(FlagKey("l"), 0L)
+    yield assertEquals(r, big)
+  }
+
+  fixture.test("ErrorMode.FlagNotFound produces FlagNotFound error code") { case (provider, flags) =>
+    for
+      _ <- provider.setErrorMode(TestFeatureProvider.ErrorMode.FlagNotFound)
+      r <- flags.booleanDetails(FlagKey("k"), false)
+      _ <- provider.clearErrorMode
+    yield
+      assert(r.isError)
+      assertEquals(r.errorCode, Some(ErrorCode.FlagNotFound))
+  }
+
+  fixture.test("ErrorMode.ParseError produces ParseError error code") { case (provider, flags) =>
+    for
+      _ <- provider.setErrorMode(TestFeatureProvider.ErrorMode.ParseError)
+      r <- flags.booleanDetails(FlagKey("k"), false)
+      _ <- provider.clearErrorMode
+    yield
+      assert(r.isError)
+      assertEquals(r.errorCode, Some(ErrorCode.ParseError))
+  }
+
+  fixture.test("ErrorMode.TypeMismatch produces TypeMismatch error code") { case (provider, flags) =>
+    for
+      _ <- provider.setErrorMode(TestFeatureProvider.ErrorMode.TypeMismatch)
+      r <- flags.booleanDetails(FlagKey("k"), false)
+      _ <- provider.clearErrorMode
+    yield
+      assert(r.isError)
+      assertEquals(r.errorCode, Some(ErrorCode.TypeMismatch))
+  }
+
+  fixture.test("ErrorMode.ProviderNotReady produces ProviderNotReady error code") { case (provider, flags) =>
+    for
+      _ <- provider.setErrorMode(TestFeatureProvider.ErrorMode.ProviderNotReady)
+      r <- flags.booleanDetails(FlagKey("k"), false)
+      _ <- provider.clearErrorMode
+    yield
+      assert(r.isError)
+      assertEquals(r.errorCode, Some(ErrorCode.ProviderNotReady))
+  }
+
+  fixture.test("evaluations are tracked even when ErrorMode is active") { case (provider, flags) =>
+    for
+      _ <- provider.setErrorMode(TestFeatureProvider.ErrorMode.General)
+      _ <- flags.boolean(FlagKey("k"), false)
+      n <- provider.evaluationCount(FlagKey("k"))
+      _ <- provider.clearErrorMode
+    yield assertEquals(n, 1)
+  }

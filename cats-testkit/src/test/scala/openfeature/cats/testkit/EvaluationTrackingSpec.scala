@@ -55,3 +55,13 @@ class EvaluationTrackingSpec extends CatsEffectSuite:
       assert(r1)
       assert(r2)
   }
+
+  fixture.test("getEvaluations records the actual evaluation context") { case (provider, flags) =>
+    for
+      _     <- flags.boolean(FlagKey("flag"), false)
+      evals <- provider.getEvaluations
+    yield
+      assertEquals(evals.size, 1)
+      assertEquals(evals.head._1, "flag")
+      assert(evals.head._2 != null, "context must not be null")
+  }

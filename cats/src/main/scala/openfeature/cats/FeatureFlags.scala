@@ -1,7 +1,7 @@
 package openfeature.cats
 
 import openfeature.model.*
-import cats.effect.{Async, IO, IOLocal, Resource}
+import cats.effect.{Async, Deferred, IO, IOLocal, Resource}
 import cats.effect.kernel.{MonadCancel, Ref}
 import cats.syntax.all.*
 import fs2.Stream
@@ -107,19 +107,48 @@ object FeatureFlags:
     * `withContext` uses a `Ref`-based bracket — safe for sequential use. For true fiber isolation (two concurrent
     * fibers maintain independent evaluation contexts) use [[makeIO]].
     */
-  def make[F[_]](provider: dev.openfeature.sdk.FeatureProvider)(using F: Async[F]): Resource[F, FeatureFlags[F]] =
+  def make[F[_]](
+    provider: dev.openfeature.sdk.FeatureProvider,
+    domain: Option[String] = None
+  )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
     FeatureFlagsLive.make[F](
       provider,
-      localCtxProvider = Ref.of[F, EvaluationContext](EvaluationContext.empty).map(ContextProvider.fromRef(_))
+      localCtxProvider = Ref.of[F, EvaluationContext](EvaluationContext.empty).map(ContextProvider.fromRef(_)),
+      domain = domain
+    )
+
+  /** Create a `FeatureFlags[F]` for a provider that starts in `NotReady` state.
+    *
+    * Uses `setProvider` (non-blocking), so resource acquisition completes before the provider is ready. The optional
+    * `onReady` deferred is completed when the Java SDK fires `PROVIDER_READY`, which lets a `TestFeatureProvider`
+    * synchronize `setStatus(Ready)` with SDK event propagation.
+    */
+  def makeAsync[F[_]](
+    provider: dev.openfeature.sdk.FeatureProvider,
+    onReady: Option[Deferred[F, Unit]] = None,
+    domain: Option[String] = None
+  )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
+    FeatureFlagsLive.makeAsync[F](
+      provider,
+      onReady,
+      localCtxProvider = Ref.of[F, EvaluationContext](EvaluationContext.empty).map(ContextProvider.fromRef(_)),
+      domain = domain
     )
 
   /** Create a `FeatureFlags[IO]` with fiber-isolated `withContext` via `IOLocal`.
     *
     * Prefer this over [[make]] when two concurrent fibers must maintain independent evaluation contexts.
     */
-  def makeIO(provider: dev.openfeature.sdk.FeatureProvider): Resource[IO, FeatureFlags[IO]] =
+  def makeIO(
+    provider: dev.openfeature.sdk.FeatureProvider,
+    domain: Option[String] = None
+  ): Resource[IO, FeatureFlags[IO]] =
     Resource
       .eval(IOLocal(EvaluationContext.empty))
       .flatMap(local =>
-        FeatureFlagsLive.make[IO](provider, localCtxProvider = IO.pure(ContextProvider.fromIOLocal(local)))
+        FeatureFlagsLive.make[IO](
+          provider,
+          localCtxProvider = IO.pure(ContextProvider.fromIOLocal(local)),
+          domain = domain
+        )
       )

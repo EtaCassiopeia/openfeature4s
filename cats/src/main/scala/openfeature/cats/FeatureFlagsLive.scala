@@ -2,7 +2,7 @@ package openfeature.cats
 
 import openfeature.model.*
 import openfeature.bridge.{ClientEvaluator, ContextConverter, ErrorCodeConverter}
-import cats.effect.{Async, IO, IOLocal, Resource}
+import cats.effect.{Async, Deferred, IO, IOLocal, Resource}
 import cats.effect.kernel.{MonadCancel, Ref}
 import cats.effect.std.Dispatcher
 import cats.syntax.all.*
@@ -134,7 +134,8 @@ private[cats] class FeatureFlagsLive[F[_]](
 private[cats] object FeatureFlagsLive:
   def make[F[_]](
     provider: FeatureProvider,
-    localCtxProvider: F[ContextProvider[F]]
+    localCtxProvider: F[ContextProvider[F]],
+    domain: Option[String] = None
   )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
     Dispatcher.parallel[F].flatMap { dispatcher =>
       Resource
@@ -146,11 +147,43 @@ private[cats] object FeatureFlagsLive:
             statusRef    <- Ref.of[F, ProviderStatus](ProviderStatus.NotReady)
             topic        <- Topic[F, Option[ProviderEvent]]
             api          <- F.delay(OpenFeatureAPI.getInstance())
-            domain = s"openfeature4s-cats-${UUID.randomUUID()}"
-            _ <- F.blocking(api.setProviderAndWait(domain, provider))
+            d = domain.getOrElse(s"openfeature4s-cats-${UUID.randomUUID()}")
+            _ <- F.blocking(api.setProviderAndWait(d, provider))
             _ <- statusRef.set(ProviderStatus.Ready)
-            client = api.getClient(domain)
+            client = api.getClient(d)
             _ <- F.delay(registerEventHandlers(client, provider, dispatcher, statusRef, topic))
+          yield (new FeatureFlagsLive[F](client, globalCtxRef, localCtx, hooksRef, topic, statusRef), topic)
+        )(release = { case (_, topic) =>
+          F.delay(provider.shutdown()).attempt.void *>
+            topic.publish1(None).attempt.void
+        })
+        .map(_._1)
+    }
+
+  /** Non-blocking variant: uses `setProvider` so resource acquisition completes before the provider reaches READY.
+    *
+    * `onReady` is completed when the Java SDK fires PROVIDER_READY, allowing callers to synchronize on readiness.
+    */
+  def makeAsync[F[_]](
+    provider: FeatureProvider,
+    onReady: Option[Deferred[F, Unit]],
+    localCtxProvider: F[ContextProvider[F]],
+    domain: Option[String] = None
+  )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
+    Dispatcher.parallel[F].flatMap { dispatcher =>
+      Resource
+        .make(
+          acquire = for
+            globalCtxRef <- Ref.of[F, EvaluationContext](EvaluationContext.empty)
+            localCtx     <- localCtxProvider
+            hooksRef     <- Ref.of[F, List[FeatureHook[F]]](Nil)
+            statusRef    <- Ref.of[F, ProviderStatus](ProviderStatus.NotReady)
+            topic        <- Topic[F, Option[ProviderEvent]]
+            api          <- F.delay(OpenFeatureAPI.getInstance())
+            d = domain.getOrElse(s"openfeature4s-cats-${UUID.randomUUID()}")
+            _ <- F.delay(api.setProvider(d, provider))
+            client = api.getClient(d)
+            _ <- F.delay(registerEventHandlers(client, provider, dispatcher, statusRef, topic, onReady))
           yield (new FeatureFlagsLive[F](client, globalCtxRef, localCtx, hooksRef, topic, statusRef), topic)
         )(release = { case (_, topic) =>
           F.delay(provider.shutdown()).attempt.void *>
@@ -164,18 +197,36 @@ private[cats] object FeatureFlagsLive:
     provider: FeatureProvider,
     dispatcher: Dispatcher[F],
     statusRef: Ref[F, ProviderStatus],
-    topic: Topic[F, Option[ProviderEvent]]
+    topic: Topic[F, Option[ProviderEvent]],
+    onReady: Option[Deferred[F, Unit]] = None
   )(using F: Async[F]): Unit =
     val meta = ProviderMetadata(provider.getMetadata.getName)
 
-    def publish(event: ProviderEvent, newStatus: ProviderStatus): Unit =
+    // Async event handlers run on the Java SDK's executor thread. Any F failure here would be
+    // silently swallowed by the dispatcher; surface it to stderr instead of discarding it.
+    def safeRunAndForget(fa: F[Unit]): Unit =
       dispatcher.unsafeRunAndForget(
-        statusRef.set(newStatus) *> topic.publish1(Some(event)).void
+        fa.handleErrorWith(e => F.delay(System.err.println(s"[openfeature4s] event handler error: ${e.getMessage}")))
       )
+
+    def publishToTopic(event: ProviderEvent): F[Unit] =
+      topic.publish1(Some(event)).flatMap {
+        case Right(()) => F.unit
+        case Left(_)   => F.raiseError(new IllegalStateException(s"[openfeature4s] event topic closed: $event"))
+      }
+
+    def publish(event: ProviderEvent, newStatus: ProviderStatus): Unit =
+      safeRunAndForget(statusRef.set(newStatus) *> publishToTopic(event))
 
     client.on(
       JavaProviderEvent.PROVIDER_READY,
-      (_: EventDetails) => publish(ProviderEvent.Ready(meta), ProviderStatus.Ready)
+      (_: EventDetails) =>
+        // guarantee ensures onReady is completed even if the topic publish fails,
+        // so setStatus(Ready) callers are never permanently suspended.
+        safeRunAndForget(
+          (statusRef.set(ProviderStatus.Ready) *> publishToTopic(ProviderEvent.Ready(meta)))
+            .guarantee(onReady.fold(F.unit)(_.complete(()).void))
+        )
     )
     client.on(
       JavaProviderEvent.PROVIDER_ERROR,

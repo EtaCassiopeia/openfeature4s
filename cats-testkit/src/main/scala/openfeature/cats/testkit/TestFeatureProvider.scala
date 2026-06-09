@@ -157,9 +157,9 @@ final class TestFeatureProvider[F[_]] private (
 
   def events: Stream[F, ProviderEvent] = topic.subscribe(128).unNoneTerminate
 
-  /** Like `events` but uses `subscribeAwait` so the subscription is guaranteed to be registered
-    * before the returned `Resource` completes acquisition. Use in tests to avoid the race between
-    * subscription and event emission that exists with bare `events` + `IO.sleep`.
+  /** Like `events` but uses `subscribeAwait` so the subscription is guaranteed to be registered before the returned
+    * `Resource` completes acquisition. Use in tests to avoid the race between subscription and event emission that
+    * exists with bare `events` + `IO.sleep`.
     */
   def eventsResource: Resource[F, Stream[F, ProviderEvent]] =
     topic.subscribeAwait(128).map(_.unNoneTerminate)

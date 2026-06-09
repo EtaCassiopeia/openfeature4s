@@ -86,12 +86,12 @@ class BehaviorControlsSpec extends CatsEffectSuite:
 
   fixture.test("setFlags replaces all flags atomically") { case (provider, flags) =>
     for
-      _    <- provider.setFlag(FlagKey("a"), "original")
-      _    <- provider.setFlag(FlagKey("b"), "keep")
-      _    <- provider.setFlags(Map(FlagKey("b") -> "updated", FlagKey("c") -> "new"))
-      a    <- flags.string(FlagKey("a"), "default")
-      b    <- flags.string(FlagKey("b"), "default")
-      c    <- flags.string(FlagKey("c"), "default")
+      _ <- provider.setFlag(FlagKey("a"), "original")
+      _ <- provider.setFlag(FlagKey("b"), "keep")
+      _ <- provider.setFlags(Map(FlagKey("b") -> "updated", FlagKey("c") -> "new"))
+      a <- flags.string(FlagKey("a"), "default")
+      b <- flags.string(FlagKey("b"), "default")
+      c <- flags.string(FlagKey("c"), "default")
     yield
       assertEquals(a, "default") // removed by setFlags
       assertEquals(b, "updated")

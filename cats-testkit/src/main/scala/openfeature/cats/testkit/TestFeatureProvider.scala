@@ -169,7 +169,23 @@ final class TestFeatureProvider[F[_]] private (
       case Left(_) =>
         F.raiseError(new IllegalStateException("[openfeature4s] cannot emit event: provider topic is closed"))
       case Right(()) =>
-        F.unit // bridge fully disabled for diagnostic
+        F.delay {
+          event match
+            case ProviderEvent.Ready(_, _) =>
+              emitProviderReady(ProviderEventDetails.builder().build())
+            case ProviderEvent.Error(_, _, errorCode, errorMessage, _) =>
+              val b = ProviderEventDetails.builder()
+              errorMessage.foreach(b.message)
+              errorCode.foreach(ec => b.errorCode(ErrorCodeConverter.toJava(ec)))
+              emitProviderError(b.build())
+            case ProviderEvent.Stale(reason, _, _) =>
+              emitProviderStale(ProviderEventDetails.builder().message(reason).build())
+            case ProviderEvent.ConfigurationChanged(changed, _, _) =>
+              emitProviderConfigurationChanged(
+                ProviderEventDetails.builder().flagsChanged(changed.toList.asJava).build()
+              )
+            case ProviderEvent.Reconnecting(_, _) => ()
+        }
     }
 
   // Behavior controls

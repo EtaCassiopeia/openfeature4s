@@ -134,7 +134,8 @@ private[cats] class FeatureFlagsLive[F[_]](
 private[cats] object FeatureFlagsLive:
   def make[F[_]](
     provider: FeatureProvider,
-    localCtxProvider: F[ContextProvider[F]]
+    localCtxProvider: F[ContextProvider[F]],
+    domain: Option[String] = None
   )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
     Dispatcher.parallel[F].flatMap { dispatcher =>
       Resource
@@ -146,10 +147,10 @@ private[cats] object FeatureFlagsLive:
             statusRef    <- Ref.of[F, ProviderStatus](ProviderStatus.NotReady)
             topic        <- Topic[F, Option[ProviderEvent]]
             api          <- F.delay(OpenFeatureAPI.getInstance())
-            domain = s"openfeature4s-cats-${UUID.randomUUID()}"
-            _ <- F.blocking(api.setProviderAndWait(domain, provider))
+            d = domain.getOrElse(s"openfeature4s-cats-${UUID.randomUUID()}")
+            _ <- F.blocking(api.setProviderAndWait(d, provider))
             _ <- statusRef.set(ProviderStatus.Ready)
-            client = api.getClient(domain)
+            client = api.getClient(d)
             _ <- F.delay(registerEventHandlers(client, provider, dispatcher, statusRef, topic))
           yield (new FeatureFlagsLive[F](client, globalCtxRef, localCtx, hooksRef, topic, statusRef), topic)
         )(release = { case (_, topic) =>
@@ -166,7 +167,8 @@ private[cats] object FeatureFlagsLive:
   def makeAsync[F[_]](
     provider: FeatureProvider,
     onReady: Option[Deferred[F, Unit]],
-    localCtxProvider: F[ContextProvider[F]]
+    localCtxProvider: F[ContextProvider[F]],
+    domain: Option[String] = None
   )(using F: Async[F]): Resource[F, FeatureFlags[F]] =
     Dispatcher.parallel[F].flatMap { dispatcher =>
       Resource
@@ -178,9 +180,9 @@ private[cats] object FeatureFlagsLive:
             statusRef    <- Ref.of[F, ProviderStatus](ProviderStatus.NotReady)
             topic        <- Topic[F, Option[ProviderEvent]]
             api          <- F.delay(OpenFeatureAPI.getInstance())
-            domain = s"openfeature4s-cats-${UUID.randomUUID()}"
-            _ <- F.delay(api.setProvider(domain, provider))
-            client = api.getClient(domain)
+            d = domain.getOrElse(s"openfeature4s-cats-${UUID.randomUUID()}")
+            _ <- F.delay(api.setProvider(d, provider))
+            client = api.getClient(d)
             _ <- F.delay(registerEventHandlers(client, provider, dispatcher, statusRef, topic, onReady))
           yield (new FeatureFlagsLive[F](client, globalCtxRef, localCtx, hooksRef, topic, statusRef), topic)
         )(release = { case (_, topic) =>
@@ -200,7 +202,8 @@ private[cats] object FeatureFlagsLive:
   )(using F: Async[F]): Unit =
     val meta = ProviderMetadata(provider.getMetadata.getName)
 
-    // Surfaces F failures to stderr rather than silently discarding them.
+    // Async event handlers run on the Java SDK's executor thread. Any F failure here would be
+    // silently swallowed by the dispatcher; surface it to stderr instead of discarding it.
     def safeRunAndForget(fa: F[Unit]): Unit =
       dispatcher.unsafeRunAndForget(
         fa.handleErrorWith(e => F.delay(System.err.println(s"[openfeature4s] event handler error: ${e.getMessage}")))

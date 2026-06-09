@@ -200,15 +200,19 @@ private[cats] object FeatureFlagsLive:
   )(using F: Async[F]): Unit =
     val meta = ProviderMetadata(provider.getMetadata.getName)
 
-    def publish(event: ProviderEvent, newStatus: ProviderStatus): Unit =
+    // Surfaces F failures to stderr rather than silently discarding them.
+    def safeRunAndForget(fa: F[Unit]): Unit =
       dispatcher.unsafeRunAndForget(
-        statusRef.set(newStatus) *> topic.publish1(Some(event)).void
+        fa.handleErrorWith(e => F.delay(System.err.println(s"[openfeature4s] event handler error: ${e.getMessage}")))
       )
+
+    def publish(event: ProviderEvent, newStatus: ProviderStatus): Unit =
+      safeRunAndForget(statusRef.set(newStatus) *> topic.publish1(Some(event)).void)
 
     client.on(
       JavaProviderEvent.PROVIDER_READY,
       (_: EventDetails) =>
-        dispatcher.unsafeRunAndForget(
+        safeRunAndForget(
           statusRef.set(ProviderStatus.Ready) *>
             topic.publish1(Some(ProviderEvent.Ready(meta))).void *>
             onReady.fold(F.unit)(_.complete(()).void)

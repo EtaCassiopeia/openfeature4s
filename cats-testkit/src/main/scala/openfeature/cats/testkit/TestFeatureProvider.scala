@@ -37,8 +37,8 @@ final class TestFeatureProvider[F[_]] private (
   private val flags: ConcurrentHashMap[String, Any],
   private val javaState: AtomicReference[ProviderState],
   private val evaluations: CopyOnWriteArrayList[(String, OFEvaluationContext)],
-  val topic: Topic[F, Option[ProviderEvent]],
-  val statusRef: Ref[F, ProviderStatus],
+  private val topic: Topic[F, Option[ProviderEvent]],
+  private val statusRef: Ref[F, ProviderStatus],
   private val initLatch: Option[CountDownLatch],
   private val readySignal: Option[Deferred[F, Unit]],
   private val behaviorRef: AtomicReference[TestFeatureProvider.BehaviorConfig],
@@ -73,11 +73,18 @@ final class TestFeatureProvider[F[_]] private (
 
   override def shutdown(): Unit =
     initLatch.foreach(_.countDown())
+    // Unblock any fiber suspended in setStatus(Ready) → awaitReady so it is not leaked on teardown.
+    readySignal.foreach(sig => dispatcher.unsafeRunAndForget(sig.complete(()).void))
     javaState.set(ProviderState.NOT_READY)
 
-  private def evalResult[A](key: String, default: A, convert: Any => A): ProviderEvaluation[A] =
+  private def evalResult[A](
+    key: String,
+    ctx: OFEvaluationContext,
+    default: A,
+    convert: Any => A
+  ): ProviderEvaluation[A] =
     applyBehavior()
-    evaluations.add((key, null))
+    evaluations.add((key, ctx))
     val value = Option(flags.get(key)).fold(default)(convert)
     ProviderEvaluation
       .builder[A]()
@@ -90,27 +97,27 @@ final class TestFeatureProvider[F[_]] private (
     default: java.lang.Boolean,
     ctx: OFEvaluationContext
   ): ProviderEvaluation[java.lang.Boolean] =
-    evalResult(key, default, _.asInstanceOf[Boolean])
+    evalResult(key, ctx, default, _.asInstanceOf[Boolean])
 
   override def getStringEvaluation(key: String, default: String, ctx: OFEvaluationContext): ProviderEvaluation[String] =
-    evalResult(key, default, _.toString)
+    evalResult(key, ctx, default, _.toString)
 
   override def getIntegerEvaluation(
     key: String,
     default: java.lang.Integer,
     ctx: OFEvaluationContext
   ): ProviderEvaluation[java.lang.Integer] =
-    evalResult(key, default, { case i: Int => i; case n: Number => n.intValue() })
+    evalResult(key, ctx, default, { case i: Int => i; case n: Number => n.intValue() })
 
   override def getDoubleEvaluation(
     key: String,
     default: java.lang.Double,
     ctx: OFEvaluationContext
   ): ProviderEvaluation[java.lang.Double] =
-    evalResult(key, default, { case d: Double => d; case n: Number => n.doubleValue() })
+    evalResult(key, ctx, default, { case d: Double => d; case n: Number => n.doubleValue() })
 
   override def getObjectEvaluation(key: String, default: Value, ctx: OFEvaluationContext): ProviderEvaluation[Value] =
-    evalResult(key, default, v => new Value(v.toString))
+    evalResult(key, ctx, default, v => new Value(v.toString))
 
   // Flag management
 
